@@ -189,22 +189,14 @@ async def websocket_feed(ws: WebSocket):
 
         # IMPORTANT: pyquotex requires the realtime candle stream to be
         # explicitly subscribed before get_realtime_candles() is read.
-        started = await client.start_candles_stream(asset, timeframe)
+        # pyquotex 1.1.0 starts the subscription asynchronously and returns
+        # None on success. Do NOT treat a falsy return value as a failure.
+        await client.start_candles_stream(asset, timeframe)
         logger.info(
-            "Realtime candle subscription result: %s asset=%s timeframe=%ss",
-            started,
+            "Realtime candle subscription requested: asset=%s timeframe=%ss",
             asset,
             timeframe,
         )
-
-        if not started:
-            await ws.send_json(
-                {
-                    "type": "error",
-                    "message": f"Could not start Quotex realtime candle stream for {asset}",
-                }
-            )
-            return
 
         last_signature = None
 
