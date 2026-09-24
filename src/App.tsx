@@ -1,4 +1,4 @@
-import {memo,useEffect,useMemo,useState} from 'react';
+import {memo,useEffect,useMemo,useRef,useState} from 'react';
 import {analyzeStructure,seedCandles} from './analysis/structure';
 import type {Candle} from './analysis/structure';
 const SYMBOLS=[
