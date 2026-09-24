@@ -1,5 +1,6 @@
 import {memo,useEffect,useMemo,useState} from 'react';
-import {analyzeStructure,Candle,seedCandles} from './analysis/structure';
+import {analyzeStructure,seedCandles} from './analysis/structure';
+import type {Candle} from './analysis/structure';
 const SYMBOLS=['EUR/USD','GBP/USD','USD/JPY','AUD/USD','BTC/USD','XAU/USD'];
 const priceText=(p:number)=>p>10?p.toFixed(2):p.toFixed(5);
 
