@@ -61,3 +61,33 @@ Do not commit `.env` or account credentials. The bridge is data-only in this imp
 - Changing symbol or Regular/OTC reconnects the feed.
 - SMC/FVG/pressure analysis consumes the same candle array shown on the chart.
 - If the bridge is offline or not configured, the dashboard intentionally shows an empty chart instead of pretending simulated prices are Quotex prices.
+
+## Deploy the live bridge
+
+The frontend cannot receive actual Quotex candles until the Python bridge is running. A Vercel static deployment alone is not enough for this Python WebSocket session. Render Web Services support inbound WebSockets, so the included `server/render.yaml` is prepared for this deployment. citeturn0search1turn0search0
+
+### Render
+
+1. Open Render and create a **Web Service** from this GitHub repository.
+2. Use the `main` branch.
+3. The included `server/render.yaml` uses `server` as the service root, installs `requirements.txt`, and starts Uvicorn on Render's `$PORT`.
+4. Add these environment variables in the Render service:
+   - `QUOTEX_EMAIL` = your Quotex email
+   - `QUOTEX_PASSWORD` = your Quotex password
+   - `QUOTEX_HOST` = `qxbroker.com`
+   - `ALLOWED_ORIGINS` = your Vercel site origin, for example `https://your-site.vercel.app`
+5. Deploy. Render provides the service's public `onrender.com` address. Public WebSocket clients should use `wss://`, not `ws://`. citeturn0search1turn0search2
+
+### Vercel
+
+In the Vercel project, go to **Settings → Environment Variables** and add:
+
+`VITE_QUOTEX_WS_URL=wss://YOUR-RENDER-SERVICE.onrender.com/ws`
+
+Apply it to **Production**, save, and redeploy. Vercel requires a new deployment for environment-variable changes to take effect. citeturn0search6turn0search12
+
+### Security
+
+Never commit the Quotex email/password to GitHub and never put them in a `VITE_*` variable. The bridge keeps the credentials server-side.
+
+The integration uses the open-source PyQuotex project as an unofficial/private-protocol integration layer. Its current source documents Quotex WebSocket connection and candle retrieval, but it is not an official Quotex public API and can break if Quotex changes its protocol or access controls. citeturn2search0turn1search5
