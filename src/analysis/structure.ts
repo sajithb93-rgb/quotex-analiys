@@ -28,7 +28,7 @@ function volumeWeight(data:Candle[],lookback=20){
  return avg>0?(data[data.length-1]?.volume??avg)/avg:1;
 }
 function calcPressure(data:Candle[]):{snap:PressureSnapshot;history:{index:number;buy:number;sell:number;delta:number}[]}{
- const start=Math.max(0,data.length-80);const history=[];let cumulative=0;
+ const start=Math.max(0,data.length-80);const history:{index:number;buy:number;sell:number;delta:number}[]=[];
  for(let i=start;i<data.length;i++){
   const c=data[i],p=candlePressure(c),vw=Math.max(.5,Math.min(2,volumeWeight(data.slice(0,i+1))));
   const buy=p.buy*vw,sell=p.sell*vw,delta=buy-sell;cumulative+=delta;
