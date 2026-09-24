@@ -1,7 +1,22 @@
 import {memo,useEffect,useMemo,useState} from 'react';
 import {analyzeStructure,seedCandles} from './analysis/structure';
 import type {Candle} from './analysis/structure';
-const SYMBOLS=['EUR/USD','GBP/USD','USD/JPY','AUD/USD','BTC/USD','XAU/USD'];
+const SYMBOLS=[
+  'EUR/USD','GBP/USD','USD/JPY','USD/CHF','AUD/USD','NZD/USD','USD/CAD',
+  'EUR/GBP','EUR/JPY','EUR/CHF','EUR/AUD','EUR/CAD','EUR/NZD',
+  'GBP/JPY','GBP/CHF','GBP/AUD','GBP/CAD','GBP/NZD',
+  'AUD/JPY','AUD/CHF','AUD/CAD','AUD/NZD','CAD/JPY','CAD/CHF',
+  'CHF/JPY','NZD/JPY','NZD/CHF','NZD/CAD',
+  'USD/SGD','USD/HKD','USD/TRY','USD/ZAR','USD/MXN','USD/BRL',
+  'USD/SEK','USD/NOK','USD/DKK','USD/PLN','USD/HUF','USD/CZK',
+  'EUR/SEK','EUR/NOK','EUR/DKK','EUR/PLN','EUR/HUF','EUR/CZK','EUR/TRY','EUR/ZAR',
+  'GBP/SEK','GBP/NOK','GBP/DKK','GBP/PLN','GBP/TRY','GBP/ZAR',
+  'AUD/SGD','NZD/SGD','CAD/SGD','CHF/SGD',
+  'XAU/USD','XAG/USD','XBR/USD','XTI/USD',
+  'BTC/USD','ETH/USD','LTC/USD','XRP/USD','BCH/USD','ADA/USD','DOGE/USD',
+  'BNB/USD','SOL/USD','DOT/USD','TRX/USD','LINK/USD',
+  'SPX/USD','NAS/USD','DJI/USD','DAX/EUR','FTSE/GBP'
+];
 const priceText=(p:number)=>p>10?p.toFixed(2):p.toFixed(5);
 
 function Chart({candles,symbol}:{candles:Candle[];symbol:string}){
