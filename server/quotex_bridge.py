@@ -153,15 +153,31 @@ async def websocket_feed(ws: WebSocket):
 
         client = await make_client(asset)
 
-        # Load recent real Quotex candles first.
+        # Resolve the exact asset name used by the current Quotex session.
+        resolved_asset, asset_status = await client.get_available_asset(asset, force_open=False)
+        logger.info("Asset resolution: requested=%s resolved=%s status=%s", asset, resolved_asset, asset_status)
+
+        if not asset_status or len(asset_status) < 3 or not asset_status[2]:
+            resolved_asset, asset_status = await client.get_available_asset(asset, force_open=True)
+            logger.info("Asset OTC fallback: resolved=%s status=%s", resolved_asset, asset_status)
+
+        if not asset_status or len(asset_status) < 3 or not asset_status[2]:
+            raise RuntimeError(f"Quotex asset is unavailable: {asset}")
+
+        asset = resolved_asset
+
+        # Quotex returns at most 199 candles per history request.
         history = await client.get_candles(
             asset,
             time.time(),
-            timeframe * 180,
+            min(timeframe * 199, 11940),
             timeframe,
         )
         snapshot = normalize_candles(history)
         logger.info("Historical candles received: %d for %s", len(snapshot), asset)
+
+        if not snapshot:
+            raise RuntimeError(f"Quotex returned no candles for {asset}")
 
         await ws.send_json(
             {
