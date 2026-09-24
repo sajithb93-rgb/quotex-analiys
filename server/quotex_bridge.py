@@ -139,6 +139,8 @@ async def make_client(asset: str):
         asset,
         "SESSION" if session_token else "EMAIL_PASSWORD",
     )
+    from pyquotex.qxtypes import ReconnectPolicy
+
     client = Quotex(
         email=EMAIL,
         password=PASSWORD,
@@ -147,6 +149,8 @@ async def make_client(asset: str):
         user_agent=session_user_agent,
         asset_default=asset,
         period_default=60,
+        # Do not let a failed authorization create an endless reconnect storm.
+        reconnect_policy=ReconnectPolicy(enabled=False),
     )
 
     if session_token:
@@ -187,10 +191,32 @@ async def make_client(asset: str):
 
         raise RuntimeError(f"Quotex connection error: {exc}") from exc
 
-    logger.info("Quotex connect result: ok=%s reason=%s", ok, reason)
+    logger.info("Quotex transport connect result: ok=%s reason=%s", ok, reason)
 
     if not ok:
         raise RuntimeError(f"Quotex connection failed: {reason}")
+
+    # pyquotex reports the TCP/WebSocket transport as connected before the
+    # Quotex authorization handshake has necessarily completed. Wait for the
+    # auth state explicitly so the bridge never proceeds to get_candles() or
+    # asset discovery on an unauthenticated socket.
+    authenticated = await client.check_connect()
+    auth_state = getattr(getattr(client, "api", None), "state", None)
+    auth_reason = getattr(auth_state, "websocket_error_reason", None)
+
+    logger.info(
+        "Quotex authentication result: authenticated=%s auth_reason=%s",
+        authenticated,
+        auth_reason or "",
+    )
+
+    if not authenticated:
+        raise RuntimeError(
+            "Quotex WebSocket authorization was rejected. "
+            "Refresh the QUOTEX_SSID session from an active logged-in Quotex browser "
+            "session and update the Render secret. "
+            + (f"Server reason: {auth_reason}" if auth_reason else "")
+        )
 
     return client
 
