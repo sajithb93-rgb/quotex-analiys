@@ -15,6 +15,13 @@ logger = logging.getLogger("quotex_bridge")
 
 EMAIL = os.getenv("QUOTEX_EMAIL", "").strip()
 PASSWORD = os.getenv("QUOTEX_PASSWORD", "").strip()
+SSID = os.getenv("QUOTEX_SSID", "").strip()
+COOKIES = os.getenv("QUOTEX_COOKIES", "").strip()
+USER_AGENT = os.getenv(
+    "QUOTEX_USER_AGENT",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+).strip()
 HOST = os.getenv("QUOTEX_HOST", "qxbroker.com").strip()
 ORIGINS = [
     x.strip()
@@ -84,24 +91,57 @@ def normalize_candles(raw: Any) -> list[dict[str, Any]]:
 
 
 async def make_client(asset: str):
-    if not EMAIL or not PASSWORD:
+    # A fresh SSID lets the bridge skip the HTTP sign-in page. This is useful
+    # when Quotex/Cloudflare returns HTTP 403 to datacenter-hosted login
+    # requests. Keep the SSID private and store it only as a Render secret.
+    if not SSID and (not EMAIL or not PASSWORD):
         raise RuntimeError(
-            "QUOTEX_EMAIL and QUOTEX_PASSWORD are required on the Render server"
+            "Configure either QUOTEX_SSID or both QUOTEX_EMAIL and QUOTEX_PASSWORD "
+            "on the Render server"
         )
 
     from pyquotex.stable_api import Quotex
 
-    logger.info("Connecting to Quotex: host=%s asset=%s", HOST, asset)
+    logger.info(
+        "Connecting to Quotex: host=%s asset=%s auth=%s",
+        HOST,
+        asset,
+        "SSID" if SSID else "EMAIL_PASSWORD",
+    )
     client = Quotex(
         email=EMAIL,
         password=PASSWORD,
         host=HOST,
         lang="en",
+        user_agent=USER_AGENT,
         asset_default=asset,
         period_default=60,
     )
 
-    ok, reason = await client.connect()
+    if SSID:
+        client.set_session(
+            user_agent=USER_AGENT,
+            cookies=COOKIES or None,
+            ssid=SSID,
+        )
+        logger.info(
+            "Using configured Quotex SSID session (cookies=%s)",
+            bool(COOKIES),
+        )
+
+    try:
+        ok, reason = await client.connect()
+    except Exception as exc:
+        response = getattr(getattr(getattr(client, "api", None), "browser", None), "response", None)
+        status_code = getattr(response, "status_code", None)
+        if status_code == 403:
+            raise RuntimeError(
+                "Quotex rejected the Render access page with HTTP 403. "
+                "Use a fresh QUOTEX_SSID session or run the bridge from a network "
+                "where Quotex accepts the connection."
+            ) from exc
+        raise RuntimeError(f"Quotex connection error: {exc}") from exc
+
     logger.info("Quotex connect result: ok=%s reason=%s", ok, reason)
 
     if not ok:
@@ -121,6 +161,8 @@ async def health():
         "ok": True,
         "service": "quotex-live-data-bridge",
         "quotex_credentials_configured": bool(EMAIL and PASSWORD),
+        "quotex_ssid_configured": bool(SSID),
+        "quotex_cookies_configured": bool(COOKIES),
         "host": HOST,
     }
 
