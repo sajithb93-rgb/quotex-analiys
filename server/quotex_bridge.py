@@ -147,14 +147,28 @@ async def make_client(asset: str):
     try:
         ok, reason = await client.connect()
     except Exception as exc:
-        response = getattr(getattr(getattr(client, "api", None), "browser", None), "response", None)
-        status_code = getattr(response, "status_code", None)
-        if status_code == 403:
+        # During HTTP login the active response lives on the temporary Login
+        # object, not on client.api.browser. Inspect both locations so a
+        # Cloudflare/Quotex 403 is reported as the actionable SSID problem.
+        candidates = [
+            getattr(getattr(client, "api", None), "browser", None),
+            getattr(getattr(client, "api", None), "login", None),
+        ]
+        status_code = None
+        for candidate in candidates:
+            response = getattr(candidate, "response", None)
+            status_code = getattr(response, "status_code", None)
+            if status_code:
+                break
+
+        if status_code == 403 or "HTTP 403" in str(exc):
             raise RuntimeError(
-                "Quotex rejected the Render access page with HTTP 403. "
-                "Use a fresh QUOTEX_SSID session or run the bridge from a network "
-                "where Quotex accepts the connection."
+                "Quotex returned HTTP 403 to the Render server. "
+                "Server-side email/password login is blocked. "
+                "Configure a fresh QUOTEX_SSID (and, when needed, "
+                "QUOTEX_COOKIES) from an authenticated Quotex browser session."
             ) from exc
+
         raise RuntimeError(f"Quotex connection error: {exc}") from exc
 
     logger.info("Quotex connect result: ok=%s reason=%s", ok, reason)
