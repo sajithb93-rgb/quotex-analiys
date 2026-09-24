@@ -1,5 +1,7 @@
 import asyncio
+import logging
 import os
+import time
 from typing import Any
 
 from dotenv import load_dotenv
@@ -7,6 +9,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("quotex_bridge")
 
 EMAIL=os.getenv("QUOTEX_EMAIL","").strip()
 PASSWORD=os.getenv("QUOTEX_PASSWORD","").strip()
@@ -26,70 +31,144 @@ def normalize_candles(raw:Any)->list[dict[str,Any]]:
     rows=[]
     source=raw.values() if isinstance(raw,dict) else raw if isinstance(raw,list) else []
     for c in source:
-        if not isinstance(c,dict):
-            continue
-        t=c.get("time",c.get("from",c.get("timestamp")))
-        o=c.get("open")
-        h=c.get("high")
-        l=c.get("low")
-        close=c.get("close")
-        if None in (t,o,h,l,close):
-            continue
         try:
-            rows.append({"time":int(float(t))*1000 if float(t)<10_000_000_000 else int(float(t)),"open":float(o),"high":float(h),"low":float(l),"close":float(close),"volume":float(c.get("volume",0) or 0)})
-        except (TypeError,ValueError):
-            pass
+            if isinstance(c,dict):
+                t=c.get("time",c.get("from",c.get("timestamp")))
+                o=c.get("open")
+                close=c.get("close")
+                h=c.get("high")
+                l=c.get("low")
+                volume=c.get("volume",0) or 0
+            elif isinstance(c,(list,tuple)) and len(c)>=5:
+                # PyQuotex candle format: [time, open, close, high, low]
+                t,o,close,h,l=c[:5]
+                volume=c[5] if len(c)>5 else 0
+            else:
+                continue
+
+            if None in (t,o,h,l,close):
+                continue
+
+            ts=float(t)
+            rows.append({
+                "time":int(ts)*1000 if ts<10_000_000_000 else int(ts),
+                "open":float(o),
+                "high":float(h),
+                "low":float(l),
+                "close":float(close),
+                "volume":float(volume or 0),
+            })
+        except (TypeError,ValueError,IndexError):
+            continue
+
     return sorted({c["time"]:c for c in rows}.values(),key=lambda x:x["time"])[-300:]
 
 async def make_client(asset:str):
     if not EMAIL or not PASSWORD:
-        raise RuntimeError("QUOTEX_EMAIL and QUOTEX_PASSWORD are required on the bridge server")
+        raise RuntimeError("QUOTEX_EMAIL and QUOTEX_PASSWORD are required on the Render server")
+
     from pyquotex.stable_api import Quotex
-    client=Quotex(email=EMAIL,password=PASSWORD,host=HOST,lang="en",asset_default=asset,period_default=60)
+
+    logger.info("Connecting to Quotex: host=%s asset=%s",HOST,asset)
+    client=Quotex(
+        email=EMAIL,
+        password=PASSWORD,
+        host=HOST,
+        lang="en",
+        asset_default=asset,
+        period_default=60,
+    )
+
     ok,reason=await client.connect()
+    logger.info("Quotex connect result: ok=%s reason=%s",ok,reason)
+
     if not ok:
         raise RuntimeError(f"Quotex connection failed: {reason}")
+
     return client
+
+@app.get("/")
+async def root():
+    return {"ok":True,"service":"quotex-live-data-bridge","websocket":"/ws"}
 
 @app.get("/health")
 async def health():
-    return {"ok":True,"service":"quotex-live-data-bridge"}
+    return {
+        "ok":True,
+        "service":"quotex-live-data-bridge",
+        "quotex_credentials_configured":bool(EMAIL and PASSWORD),
+        "host":HOST,
+    }
 
 @app.websocket("/ws")
 async def websocket_feed(ws:WebSocket):
     await ws.accept()
     client=None
-    asset=None
+
     try:
+        logger.info("Browser WebSocket connected")
         request=await ws.receive_json()
+        logger.info("Browser subscription request: %s",request)
+
         if request.get("type")!="subscribe":
             await ws.send_json({"type":"error","message":"First message must be subscribe"})
             await ws.close()
             return
-        asset=normalize_asset(str(request.get("symbol","EUR/USD")),str(request.get("mode","REGULAR")).upper())
+
+        mode=str(request.get("mode","REGULAR")).upper()
+        asset=normalize_asset(str(request.get("symbol","EUR/USD")),mode)
         timeframe=int(request.get("timeframe",60))
+
         if timeframe not in (5,10,15,30,60,120,300,600,900,1800,3600):
             timeframe=60
 
         client=await make_client(asset)
-        history=await client.get_historical_candles(asset,amount_of_seconds=timeframe*180,period=timeframe,max_workers=2)
-        await ws.send_json({"type":"snapshot","symbol":asset,"candles":normalize_candles(history)})
 
-        await client.start_candles_one_stream(asset,timeframe)
+        # Load a compact real Quotex history buffer.
+        history=await client.get_candles(
+            asset,
+            time.time(),
+            timeframe*180,
+            timeframe,
+            timeout=15,
+        )
+
+        snapshot=normalize_candles(history)
+        logger.info("Historical candles received: %d",len(snapshot))
+
+        await ws.send_json({
+            "type":"snapshot",
+            "symbol":asset,
+            "candles":snapshot,
+        })
+
+        # Keep the realtime candle stream active.
+        await client.start_candles_stream(asset,timeframe)
+        logger.info("Realtime candle stream started: %s %ss",asset,timeframe)
 
         last_signature=None
+
         while True:
-            raw=client.get_realtime_candles(asset,timeframe)
+            raw=await client.get_realtime_candles(asset)
             candles=normalize_candles(raw)
+
             if candles:
                 signature=(candles[-1]["time"],candles[-1]["close"],len(candles))
+
                 if signature!=last_signature:
                     last_signature=signature
-                    await ws.send_json({"type":"candles","symbol":asset,"candles":candles})
+                    await ws.send_json({
+                        "type":"candles",
+                        "symbol":asset,
+                        "candles":candles,
+                    })
+
             await asyncio.sleep(0.25)
+
     except WebSocketDisconnect:
-        pass
+        logger.info("Browser WebSocket disconnected")
     except Exception as exc:
+        logger.exception("Quotex bridge error")
         try:
             await ws.send_json({"type":"error","message":str(exc)})
         except Exception:
@@ -99,8 +178,13 @@ async def websocket_feed(ws:WebSocket):
             try:
                 await client.close()
             except Exception:
-                pass
+                logger.exception("Error closing Quotex client")
 
 if __name__=="__main__":
     import uvicorn
-    uvicorn.run("quotex_bridge:app",host=os.getenv("BRIDGE_HOST","0.0.0.0"),port=int(os.getenv("BRIDGE_PORT","8000")),reload=False)
+    uvicorn.run(
+        "quotex_bridge:app",
+        host=os.getenv("BRIDGE_HOST","0.0.0.0"),
+        port=int(os.getenv("BRIDGE_PORT","8000")),
+        reload=False,
+    )
