@@ -1,14 +1,63 @@
 # Quotex Smart Analysis
 
-Separate web dashboard for Regular + OTC analysis on a 1-minute chart.
+This dashboard renders actual Quotex candle data through a server-side adapter. The browser does not generate synthetic/random prices in live mode.
 
-Included: responsive dark UI, Regular/OTC mode, 1M, lightweight SVG candles, HH/HL/LH/LL labels, BOS/CHoCH, FVG zones, BUY/SELL/WAIT panel, bounded realtime candle engine and adapter boundary.
+## Live architecture
 
-The current browser build uses a local realtime stream simulator so the rendering path can be tested without pretending to have direct Quotex feed access. For production-live data, connect an authorized/supported Regular or OTC source to the normalized OHLC adapter. Do not scrape, bypass authentication, or reverse-engineer a private Quotex websocket/API.
+Browser (Vite/React) -> WebSocket -> `server/quotex_bridge.py` -> Quotex session -> live candle stream.
 
-Performance: bounded visible candles, lightweight SVG, memoized structure analysis, and only the current candle is updated between 1-minute closes. React memoization/caching and non-blocking update patterns are used where useful.
+The bridge uses the open-source **PyQuotex** client as an unofficial integration layer. PyQuotex documents WebSocket connectivity, historical candles, and real-time candle subscriptions, but it is not an official Quotex API. Its behavior can change if Quotex changes its private protocol or access controls.
 
-Run: npm install && npm run dev
-Build: npm run build
+## 1. Start the bridge
 
-Analysis software is decision-support only and does not guarantee trading outcomes.
+Requirements: Python 3.12+.
+
+```bash
+cd server
+python -m venv .venv
+# Windows: .venv\\Scripts\\activate
+# macOS/Linux: source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+Put the Quotex account credentials only in `server/.env`. Never put them in `VITE_*` variables or frontend source code.
+
+Then:
+
+```bash
+python quotex_bridge.py
+```
+
+The bridge listens on `ws://localhost:8000/ws`.
+
+## 2. Point the frontend to the bridge
+
+Create `.env.local` in the project root:
+
+```bash
+VITE_QUOTEX_WS_URL=ws://localhost:8000/ws
+```
+
+Then run:
+
+```bash
+npm install
+npm run dev
+```
+
+## 3. Deployment
+
+The React/Vite frontend can be deployed to Vercel, but the persistent Quotex WebSocket bridge should run as a separate long-lived Python service. Set `VITE_QUOTEX_WS_URL` to that bridge's secure `wss://.../ws` endpoint.
+
+## Security
+
+Do not commit `.env` or account credentials. The bridge is data-only in this implementation; it does not expose trade placement endpoints.
+
+## Data behavior
+
+- No random/synthetic candles are generated in live mode.
+- Historical candles are loaded first, then the real-time candle stream updates the chart.
+- Changing symbol or Regular/OTC reconnects the feed.
+- SMC/FVG/pressure analysis consumes the same candle array shown on the chart.
+- If the bridge is offline or not configured, the dashboard intentionally shows an empty chart instead of pretending simulated prices are Quotex prices.
