@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: quotex-live-bridge
+    runtime: python
+    rootDir: server
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn quotex_bridge:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.5
+      - key: QUOTEX_EMAIL
+        sync: false
+      - key: QUOTEX_PASSWORD
+        sync: false
+      - key: QUOTEX_HOST
+        value: qxbroker.com
+      - key: ALLOWED_ORIGINS
+        sync: false
