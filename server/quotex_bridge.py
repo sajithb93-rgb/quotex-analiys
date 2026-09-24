@@ -142,9 +142,9 @@ async def websocket_feed(ws:WebSocket):
             "candles":snapshot,
         })
 
-        # Keep the realtime candle stream active.
-        await client.start_candles_stream(asset,timeframe)
-        logger.info("Realtime candle stream started: %s %ss",asset,timeframe)
+        # get_candles() already starts the candle stream; keep reading its
+        # shared realtime buffer without sending a duplicate subscription.
+        logger.info("Realtime candle stream is active: %s %ss",asset,timeframe)
 
         last_signature=None
 
