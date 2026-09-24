@@ -100,6 +100,21 @@ async def make_client(asset: str):
             "on the Render server"
         )
 
+    # pyquotex 1.1.0 expects an aiohttp-style reason_phrase attribute,
+    # while its current curl_cffi Response only exposes reason. Add a
+    # compatibility property before importing Quotex so HTTP errors (notably
+    # Cloudflare/Quotex 403 responses on hosted servers) are reported cleanly
+    # instead of crashing with AttributeError.
+    try:
+        from curl_cffi.requests import Response as CurlResponse
+
+        if not hasattr(CurlResponse, "reason_phrase"):
+            CurlResponse.reason_phrase = property(
+                lambda response: getattr(response, "reason", "")
+            )
+    except Exception as exc:
+        logger.warning("Could not install curl_cffi response compatibility patch: %s", exc)
+
     from pyquotex.stable_api import Quotex
 
     logger.info(
