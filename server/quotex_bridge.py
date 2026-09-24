@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import json
 import os
 import time
 from typing import Any
@@ -17,6 +18,7 @@ EMAIL = os.getenv("QUOTEX_EMAIL", "").strip()
 PASSWORD = os.getenv("QUOTEX_PASSWORD", "").strip()
 SSID = os.getenv("QUOTEX_SSID", "").strip()
 COOKIES = os.getenv("QUOTEX_COOKIES", "").strip()
+SESSION_JSON = os.getenv("QUOTEX_SESSION_JSON", "").strip()
 USER_AGENT = os.getenv(
     "QUOTEX_USER_AGENT",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -91,10 +93,24 @@ def normalize_candles(raw: Any) -> list[dict[str, Any]]:
 
 
 async def make_client(asset: str):
+    session_token = SSID
+    session_cookies = COOKIES
+    session_user_agent = USER_AGENT
+
+    if SESSION_JSON:
+        try:
+            saved = json.loads(SESSION_JSON)
+            if isinstance(saved, dict):
+                session_token = str(saved.get("token") or saved.get("ssid") or session_token).strip()
+                session_cookies = str(saved.get("cookies") or session_cookies).strip()
+                session_user_agent = str(saved.get("user_agent") or session_user_agent).strip()
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("QUOTEX_SESSION_JSON is not valid JSON") from exc
+
     # A fresh SSID lets the bridge skip the HTTP sign-in page. This is useful
     # when Quotex/Cloudflare returns HTTP 403 to datacenter-hosted login
     # requests. Keep the SSID private and store it only as a Render secret.
-    if not SSID and (not EMAIL or not PASSWORD):
+    if not session_token and (not EMAIL or not PASSWORD):
         raise RuntimeError(
             "Configure either QUOTEX_SSID or both QUOTEX_EMAIL and QUOTEX_PASSWORD "
             "on the Render server"
@@ -121,27 +137,27 @@ async def make_client(asset: str):
         "Connecting to Quotex: host=%s asset=%s auth=%s",
         HOST,
         asset,
-        "SSID" if SSID else "EMAIL_PASSWORD",
+        "SESSION" if session_token else "EMAIL_PASSWORD",
     )
     client = Quotex(
         email=EMAIL,
         password=PASSWORD,
         host=HOST,
         lang="en",
-        user_agent=USER_AGENT,
+        user_agent=session_user_agent,
         asset_default=asset,
         period_default=60,
     )
 
-    if SSID:
+    if session_token:
         client.set_session(
-            user_agent=USER_AGENT,
-            cookies=COOKIES or None,
-            ssid=SSID,
+            user_agent=session_user_agent,
+            cookies=session_cookies or None,
+            ssid=session_token,
         )
         logger.info(
             "Using configured Quotex SSID session (cookies=%s)",
-            bool(COOKIES),
+            bool(session_cookies),
         )
 
     try:
@@ -190,8 +206,9 @@ async def health():
         "ok": True,
         "service": "quotex-live-data-bridge",
         "quotex_credentials_configured": bool(EMAIL and PASSWORD),
-        "quotex_ssid_configured": bool(SSID),
+        "quotex_ssid_configured": bool(SSID or SESSION_JSON),
         "quotex_cookies_configured": bool(COOKIES),
+        "quotex_session_json_configured": bool(SESSION_JSON),
         "host": HOST,
     }
 
