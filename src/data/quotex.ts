@@ -8,7 +8,8 @@ type FeedHandlers={
 };
 
 export function connectQuotexFeed(symbol:string,mode:'REGULAR'|'OTC',handlers:FeedHandlers){
-  const raw=import.meta.env.VITE_QUOTEX_WS_URL as string|undefined;
+  const env=(import.meta as ImportMeta & {env?:Record<string,string|undefined>}).env;
+  const raw=env?.VITE_QUOTEX_WS_URL;
   if(!raw){
     handlers.onStatus('offline','VITE_QUOTEX_WS_URL is not configured');
     return ()=>{};
