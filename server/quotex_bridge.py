@@ -101,11 +101,28 @@ async def make_client(asset: str):
         try:
             saved = json.loads(SESSION_JSON)
             if isinstance(saved, dict):
-                session_token = str(saved.get("token") or saved.get("ssid") or session_token).strip()
-                session_cookies = str(saved.get("cookies") or session_cookies).strip()
-                session_user_agent = str(saved.get("user_agent") or session_user_agent).strip()
+                # A dedicated QUOTEX_SSID / QUOTEX_COOKIES environment
+                # variable is the explicit override. This prevents an older
+                # QUOTEX_SESSION_JSON value from silently replacing a fresh
+                # browser session copied into Render.
+                json_token = str(saved.get("token") or saved.get("ssid") or "").strip()
+                json_cookies = str(saved.get("cookies") or "").strip()
+                json_user_agent = str(saved.get("user_agent") or "").strip()
+
+                if not session_token and json_token:
+                    session_token = json_token
+                if not session_cookies and json_cookies:
+                    session_cookies = json_cookies
+                if json_user_agent:
+                    session_user_agent = json_user_agent
         except json.JSONDecodeError as exc:
             raise RuntimeError("QUOTEX_SESSION_JSON is not valid JSON") from exc
+
+    # Never let placeholder/example values become a real session.
+    if session_token.upper() in {"YOUR_SSID", "YOUR_TOKEN", "TOKEN", "SSID"}:
+        session_token = ""
+    if session_cookies.upper() in {"YOUR_COOKIES", "COOKIES"}:
+        session_cookies = ""
 
     # A fresh SSID lets the bridge skip the HTTP sign-in page. This is useful
     # when Quotex/Cloudflare returns HTTP 403 to datacenter-hosted login
