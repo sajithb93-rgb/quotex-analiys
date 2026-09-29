@@ -12,11 +12,12 @@ const DEFAULT_QUOTEX_WS_URL='wss://quotex-analiys.onrender.com/ws';
 export function connectQuotexFeed(symbol:string,mode:'REGULAR'|'OTC',handlers:FeedHandlers){
   const env=(import.meta as ImportMeta & {env?:Record<string,string|undefined>}).env;
   const configured=(env?.VITE_QUOTEX_WS_URL||DEFAULT_QUOTEX_WS_URL).trim();
-  const raw=configured.toLowerCase().startsWith('https://')
+  let raw=configured.toLowerCase().startsWith('https://')
     ? 'wss://'+configured.slice(8)
     : configured.toLowerCase().startsWith('http://')
       ? 'ws://'+configured.slice(7)
-      : configured.replace(/\\/+$/,'');
+      : configured;
+  while(raw.endsWith('/')) raw=raw.slice(0,-1);
 
   if(!raw){
     handlers.onStatus('offline','Quotex WebSocket URL is not configured');
