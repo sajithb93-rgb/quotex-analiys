@@ -18,9 +18,6 @@ EMAIL = os.getenv("QUOTEX_EMAIL", "").strip()
 PASSWORD = os.getenv("QUOTEX_PASSWORD", "").strip()
 SSID = os.getenv("QUOTEX_SSID", "").strip()
 COOKIES = os.getenv("QUOTEX_COOKIES", "").strip()
-# A raw Cookie header may itself contain an ssid cookie.
-if not SSID and COOKIES:
-    SSID = extract_ssid_from_cookie_string(COOKIES)
 SESSION_JSON = os.getenv("QUOTEX_SESSION_JSON", "").strip()
 USER_AGENT = os.getenv(
     "QUOTEX_USER_AGENT",
@@ -157,6 +154,10 @@ async def make_client(asset: str):
     session_token = SSID
     session_cookies = COOKIES
     session_user_agent = USER_AGENT
+
+    # Allow QUOTEX_COOKIES to carry the ssid cookie directly.
+    if not session_token and session_cookies:
+        session_token = extract_ssid_from_cookie_string(session_cookies)
 
     if SESSION_JSON:
         try:
