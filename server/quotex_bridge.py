@@ -18,6 +18,9 @@ EMAIL = os.getenv("QUOTEX_EMAIL", "").strip()
 PASSWORD = os.getenv("QUOTEX_PASSWORD", "").strip()
 SSID = os.getenv("QUOTEX_SSID", "").strip()
 COOKIES = os.getenv("QUOTEX_COOKIES", "").strip()
+# A raw Cookie header may itself contain an ssid cookie.
+if not SSID and COOKIES:
+    SSID = extract_ssid_from_cookie_string(COOKIES)
 SESSION_JSON = os.getenv("QUOTEX_SESSION_JSON", "").strip()
 USER_AGENT = os.getenv(
     "QUOTEX_USER_AGENT",
@@ -39,6 +42,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def extract_ssid_from_cookie_string(cookie_string: str) -> str:
+    """Extract the Quotex ssid cookie from a raw Cookie header/string."""
+    for item in cookie_string.split(";"):
+        key, sep, value = item.strip().partition("=")
+        if sep and key.strip().lower() == "ssid" and value.strip():
+            return value.strip()
+    return ""
 
 
 def normalize_asset(symbol: str, mode: str) -> str:
@@ -158,6 +170,8 @@ async def make_client(asset: str):
                 json_cookies = str(saved.get("cookies") or "").strip()
                 json_user_agent = str(saved.get("user_agent") or "").strip()
 
+                if not json_token and json_cookies:
+                    json_token = extract_ssid_from_cookie_string(json_cookies)
                 if not session_token and json_token:
                     session_token = json_token
                 if not session_cookies and json_cookies:
