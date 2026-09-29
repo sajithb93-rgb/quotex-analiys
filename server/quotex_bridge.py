@@ -48,6 +48,55 @@ def normalize_asset(symbol: str, mode: str) -> str:
     return asset
 
 
+def normalize_realtime_ticks(raw: Any) -> list[tuple[int, float]]:
+    """Normalize PyQuotex realtime payloads into (timestamp_ms, price)."""
+    rows: list[tuple[int, float]] = []
+
+    def add_tick(t: Any, p: Any) -> None:
+        try:
+            if t is None or p is None:
+                return
+            ts = float(t)
+            price = float(p)
+            if ts < 10_000_000_000:
+                ts *= 1000
+            if not (ts > 0 and price > 0):
+                return
+            rows.append((int(ts), price))
+        except (TypeError, ValueError):
+            return
+
+    if isinstance(raw, dict):
+        if "time" in raw and "price" in raw:
+            add_tick(raw.get("time"), raw.get("price"))
+        else:
+            for value in raw.values():
+                if isinstance(value, dict) and "time" in value and "price" in value:
+                    add_tick(value.get("time"), value.get("price"))
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, dict):
+                            add_tick(item.get("time"), item.get("price"))
+                        elif isinstance(item, (list, tuple)) and len(item) >= 3:
+                            add_tick(item[0], item[1])
+    elif isinstance(raw, (list, tuple)):
+        # PyQuotex currently stores the latest realtime candle/tick as:
+        # [asset, timestamp, price, direction].
+        if len(raw) >= 3 and isinstance(raw[0], str):
+            add_tick(raw[1], raw[2])
+        else:
+            for item in raw:
+                if isinstance(item, dict):
+                    add_tick(item.get("time"), item.get("price"))
+                elif isinstance(item, (list, tuple)) and len(item) >= 3:
+                    if isinstance(item[0], str) and len(item) >= 3:
+                        add_tick(item[1], item[2])
+                    else:
+                        add_tick(item[0], item[1])
+
+    return list(dict.fromkeys(rows))[-200:]
+
+
 def normalize_candles(raw: Any) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     source = raw.values() if isinstance(raw, dict) else raw if isinstance(raw, list) else []
@@ -297,31 +346,48 @@ async def websocket_feed(ws: WebSocket):
 
         asset = resolved_asset
 
-        # Quotex returns at most 199 candles per history request.
-        history = await client.get_candles(
-            asset,
-            time.time(),
-            min(timeframe * 199, 11940),
-            timeframe,
-        )
-        snapshot = normalize_candles(history)
-        logger.info("Historical candles received: %d for %s", len(snapshot), asset)
+        # Load actual historical candles first. Some Quotex sessions can
+        # temporarily time out on the history channel even though the realtime
+        # stream is healthy, so retry before failing the browser connection.
+        snapshot: list[dict[str, Any]] = []
+        for attempt in range(1, 4):
+            try:
+                history = await client.get_candles(
+                    asset,
+                    time.time(),
+                    timeframe * 199,
+                    timeframe,
+                )
+                snapshot = normalize_candles(history)
+                logger.info(
+                    "Historical candles attempt=%d received=%d for %s",
+                    attempt,
+                    len(snapshot),
+                    asset,
+                )
+                if snapshot:
+                    break
+            except Exception as exc:
+                logger.warning(
+                    "Historical candles attempt=%d failed for %s: %s",
+                    attempt,
+                    asset,
+                    exc,
+                )
+            await asyncio.sleep(attempt * 0.5)
 
-        if not snapshot:
-            raise RuntimeError(f"Quotex returned no candles for {asset}")
+        if snapshot:
+            await ws.send_json(
+                {
+                    "type": "snapshot",
+                    "symbol": asset,
+                    "candles": snapshot,
+                }
+            )
 
-        await ws.send_json(
-            {
-                "type": "snapshot",
-                "symbol": asset,
-                "candles": snapshot,
-            }
-        )
-
-        # IMPORTANT: pyquotex requires the realtime candle stream to be
-        # explicitly subscribed before get_realtime_candles() is read.
-        # pyquotex 1.1.0 starts the subscription asynchronously and returns
-        # None on success. Do NOT treat a falsy return value as a failure.
+        # PyQuotex explicitly subscribes the realtime feed before its
+        # get_realtime_* accessors are populated. Do not treat the method's
+        # None return value as a subscription failure.
         await client.start_candles_stream(asset, timeframe)
         logger.info(
             "Realtime candle subscription requested: asset=%s timeframe=%ss",
@@ -329,30 +395,95 @@ async def websocket_feed(ws: WebSocket):
             timeframe,
         )
 
+        # Keep the browser chart fed with real Quotex ticks. The current
+        # PyQuotex API stores realtime_candles as a raw tick payload
+        # [asset, timestamp, price, direction], not as an OHLC candle object.
+        # Aggregate those real ticks into the same 1M/selected-timeframe
+        # candles shown to the frontend.
+        candle_map: dict[int, dict[str, Any]] = {
+            int(c["time"]): dict(c) for c in snapshot
+        }
         last_signature = None
+        if snapshot:
+            last = snapshot[-1]
+            last_signature = (
+                last["time"],
+                last["open"],
+                last["high"],
+                last["low"],
+                last["close"],
+            )
+        no_tick_since = time.monotonic()
 
         while True:
-            raw = await client.get_realtime_candles(asset)
-            candles = normalize_candles(raw)
+            ticks: list[tuple[int, float]] = []
+            try:
+                realtime_prices = await client.get_realtime_price(asset)
+                ticks.extend(normalize_realtime_ticks(realtime_prices[-50:]))
+            except Exception as exc:
+                logger.debug("Realtime price read failed: %s", exc)
 
-            if candles:
-                signature = (
-                    candles[-1]["time"],
-                    candles[-1]["open"],
-                    candles[-1]["high"],
-                    candles[-1]["low"],
-                    candles[-1]["close"],
-                )
+            try:
+                realtime_candle = await client.get_realtime_candles(asset)
+                ticks.extend(normalize_realtime_ticks(realtime_candle))
+            except Exception as exc:
+                logger.debug("Realtime candle read failed: %s", exc)
 
-                if signature != last_signature:
-                    last_signature = signature
-                    await ws.send_json(
-                        {
-                            "type": "candles",
-                            "symbol": asset,
-                            "candles": candles,
+            if ticks:
+                no_tick_since = time.monotonic()
+                changed = False
+                bucket_ms = timeframe * 1000
+                for ts_ms, price in ticks:
+                    bucket = (ts_ms // bucket_ms) * bucket_ms
+                    candle = candle_map.get(bucket)
+                    if candle is None:
+                        candle_map[bucket] = {
+                            "time": bucket,
+                            "open": price,
+                            "high": price,
+                            "low": price,
+                            "close": price,
+                            "volume": 0,
                         }
+                        changed = True
+                        continue
+
+                    old = (candle["high"], candle["low"], candle["close"])
+                    candle["high"] = max(float(candle["high"]), price)
+                    candle["low"] = min(float(candle["low"]), price)
+                    candle["close"] = price
+                    if old != (candle["high"], candle["low"], candle["close"]):
+                        changed = True
+
+                if changed:
+                    merged = sorted(candle_map.values(), key=lambda x: x["time"])[-300:]
+                    candle_map = {int(c["time"]): c for c in merged}
+                    last = merged[-1]
+                    signature = (
+                        last["time"],
+                        last["open"],
+                        last["high"],
+                        last["low"],
+                        last["close"],
                     )
+                    if signature != last_signature:
+                        last_signature = signature
+                        await ws.send_json(
+                            {
+                                "type": "candles",
+                                "symbol": asset,
+                                "candles": merged,
+                            }
+                        )
+
+            # A healthy authenticated Quotex socket can still have an empty
+            # history response briefly. Give the realtime stream a few seconds
+            # to provide genuine ticks before reporting a hard data error.
+            if not candle_map and time.monotonic() - no_tick_since > 8:
+                raise RuntimeError(
+                    f"Quotex authenticated, but no candle/tick data arrived for {asset}. "
+                    "The selected asset may be closed/unavailable in this session."
+                )
 
             await asyncio.sleep(0.25)
 
