@@ -11,7 +11,8 @@ const DEFAULT_QUOTEX_WS_URL='wss://quotex-analiys.onrender.com/ws';
 
 export function connectQuotexFeed(symbol:string,mode:'REGULAR'|'OTC',handlers:FeedHandlers){
   const env=(import.meta as ImportMeta & {env?:Record<string,string|undefined>}).env;
-  const raw=(env?.VITE_QUOTEX_WS_URL||DEFAULT_QUOTEX_WS_URL).trim();
+  const configured=(env?.VITE_QUOTEX_WS_URL||DEFAULT_QUOTEX_WS_URL).trim();
+  const raw=configured.replace(/^https:\\/\\//i,'wss://').replace(/^http:\\/\\//i,'ws://').replace(/\\/+$/,'');
 
   if(!raw){
     handlers.onStatus('offline','Quotex WebSocket URL is not configured');
@@ -47,6 +48,10 @@ export function connectQuotexFeed(symbol:string,mode:'REGULAR'|'OTC',handlers:Fe
     ws.onmessage=(event)=>{
       try{
         const msg=JSON.parse(String(event.data));
+
+        if(msg.type==='status'){
+          handlers.onStatus(receivedCandles?'live':'connecting',String(msg.message||'Quotex feed status'));
+        }
 
         if(msg.type==='snapshot'||msg.type==='candles'){
           const rows=Array.isArray(msg.candles)?msg.candles:[];
